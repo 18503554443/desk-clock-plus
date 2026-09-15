@@ -1,0 +1,11 @@
+clock.log
+config.ini
+DesktopClock.exe
+*.user
+*.suo
+.vs/
+bin/
+obj/
+dist/*
+!dist/DeskClockPlus.exe
+_*
