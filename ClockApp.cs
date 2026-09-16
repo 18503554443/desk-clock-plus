@@ -202,6 +202,42 @@ namespace DeskClock
         }
     }
 
+    internal static class StartupManager
+    {
+        private const string RunKey = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        private const string ValueName = "DeskClockPlus";
+
+        public static string ExecutablePath()
+        {
+            try { return System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName; }
+            catch { return System.Reflection.Assembly.GetExecutingAssembly().Location; }
+        }
+
+        public static bool IsEnabled()
+        {
+            try
+            {
+                using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey, false))
+                {
+                    if (key == null) return false;
+                    string value = Convert.ToString(key.GetValue(ValueName));
+                    return string.Equals(value, "\"" + ExecutablePath() + "\"", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch { return false; }
+        }
+
+        public static void SetEnabled(bool enabled)
+        {
+            using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RunKey))
+            {
+                if (key == null) return;
+                if (enabled) key.SetValue(ValueName, "\"" + ExecutablePath() + "\"");
+                else key.DeleteValue(ValueName, false);
+            }
+        }
+    }
+
     internal static class CountdownCalendar
     {
         public static CountdownOccurrence FindNearest(DateTime now)
@@ -1161,12 +1197,19 @@ namespace DeskClock
             setPay.Click += delegate { OpenPayDialog(); };
             MenuItem setCountdown = new MenuItem { Header = "设置倒计时..." };
             setCountdown.Click += delegate { OpenCountdownDialog(); };
+            MenuItem startup = new MenuItem { Header = "开机自启", IsCheckable = true, IsChecked = StartupManager.IsEnabled() };
+            startup.Click += delegate
+            {
+                StartupManager.SetEnabled(startup.IsChecked);
+                startup.IsChecked = StartupManager.IsEnabled();
+            };
             MenuItem hide = new MenuItem { Header = "隐藏到托盘" };
             hide.Click += delegate { Hide(); };
             MenuItem exit = new MenuItem { Header = "退出" };
             exit.Click += delegate { ExitFromTray(); };
             menu.Items.Add(setPay);
             menu.Items.Add(setCountdown);
+            menu.Items.Add(startup);
             menu.Items.Add(hide);
             menu.Items.Add(exit);
             ContextMenu = menu;
@@ -1228,11 +1271,16 @@ namespace DeskClock
             settings.Click += delegate { OpenPayDialog(); };
             WinForms.ToolStripMenuItem countdowns = new WinForms.ToolStripMenuItem("设置倒计时...");
             countdowns.Click += delegate { OpenCountdownDialog(); };
+            WinForms.ToolStripMenuItem startup = new WinForms.ToolStripMenuItem("开机自启");
+            startup.CheckOnClick = true;
+            startup.Checked = StartupManager.IsEnabled();
+            startup.CheckedChanged += delegate { StartupManager.SetEnabled(startup.Checked); };
             WinForms.ToolStripMenuItem exit = new WinForms.ToolStripMenuItem("退出");
             exit.Click += delegate { ExitFromTray(); };
             trayMenu.Items.Add(showHide);
             trayMenu.Items.Add(settings);
             trayMenu.Items.Add(countdowns);
+            trayMenu.Items.Add(startup);
             trayMenu.Items.Add(new WinForms.ToolStripSeparator());
             trayMenu.Items.Add(exit);
             trayIcon.ContextMenuStrip = trayMenu;
