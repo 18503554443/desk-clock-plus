@@ -289,29 +289,13 @@ namespace DeskClock
         public static string Countdown(DateTime today)
         {
             DateTime day = today.Date;
-            if (IsHoliday(day)) return "假期中";
+            if (!IsWorkday(day)) return "假期中";
 
-            DateTime next = DateTime.MaxValue;
-            lock (RemoteLock)
+            for (int i = 1; i <= 370; i++)
             {
-                for (int i = 0; i < Official.Length; i++)
-                {
-                    if (RemoteYears.Contains(Official[i].Start.Year)) continue;
-                    if (Official[i].Start > day && Official[i].Start < next) next = Official[i].Start;
-                }
-                for (int i = 0; i < RemotePeriods.Count; i++)
-                {
-                    if (RemotePeriods[i].Start > day && RemotePeriods[i].Start < next) next = RemotePeriods[i].Start;
-                }
+                if (!IsWorkday(day.AddDays(i))) return "距放假 " + i + "天";
             }
-            for (int i = 0; i < Config.Holidays.Count; i++)
-            {
-                DateTime h = Config.Holidays[i].Date;
-                if (h > day && h < next) next = h;
-            }
-
-            if (next == DateTime.MaxValue) return "放假安排待公布";
-            return "距放假 " + (next - day).Days + "天";
+            return "放假安排待公布";
         }
 
         public static bool IsHoliday(DateTime day)
