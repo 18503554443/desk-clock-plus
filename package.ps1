@@ -16,12 +16,13 @@ function Find-Asm($name) {
 }
 
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-$refs = @('System.dll','System.Core.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Web.Extensions.dll','System.Xaml.dll','WindowsBase.dll','PresentationCore.dll','PresentationFramework.dll') |
+$refs = @('System.dll','System.Core.dll','System.Drawing.dll','System.Management.dll','System.Windows.Forms.dll','System.Web.Extensions.dll','System.Xaml.dll','WindowsBase.dll','PresentationCore.dll','PresentationFramework.dll') |
         ForEach-Object { '/r:' + (Find-Asm $_) }
 $icon = Join-Path $dir 'app.ico'
+$manifest = Join-Path $dir 'app.manifest'
 if (!(Test-Path $icon)) { & (Join-Path $dir 'make-icon.ps1') | Out-Null }
 $iconArgs = @(('/win32icon:' + $icon), ('/resource:' + $icon + ',AppIcon.ico'))
 
-& $csc /nologo /noconfig /optimize+ /target:winexe /platform:anycpu /out:$out @iconArgs @refs (Join-Path $dir 'ClockApp.cs')
+& $csc /nologo /noconfig /optimize+ /target:winexe /platform:anycpu /out:$out /win32manifest:$manifest @iconArgs @refs (Join-Path $dir 'ClockApp.cs')
 if ($LASTEXITCODE -ne 0) { throw 'package failed' }
 "packaged: $out"

@@ -13,13 +13,14 @@ function Find-Asm($name) {
   throw "assembly not found: $name"
 }
 
-$refs = @('System.dll','System.Core.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Web.Extensions.dll','System.Xaml.dll','WindowsBase.dll','PresentationCore.dll','PresentationFramework.dll') |
+$refs = @('System.dll','System.Core.dll','System.Drawing.dll','System.Management.dll','System.Windows.Forms.dll','System.Web.Extensions.dll','System.Xaml.dll','WindowsBase.dll','PresentationCore.dll','PresentationFramework.dll') |
         ForEach-Object { '/r:' + (Find-Asm $_) }
 $icon = Join-Path $dir 'app.ico'
+$manifest = Join-Path $dir 'app.manifest'
 if (!(Test-Path $icon)) { & (Join-Path $dir 'make-icon.ps1') | Out-Null }
 $iconArgs = @(('/win32icon:' + $icon), ('/resource:' + $icon + ',AppIcon.ico'))
 
 $out = Join-Path $dir 'DesktopClock.exe'
-& $csc /nologo /noconfig /target:winexe /platform:anycpu /out:$out @iconArgs @refs (Join-Path $dir 'ClockApp.cs')
+& $csc /nologo /noconfig /target:winexe /platform:anycpu /out:$out /win32manifest:$manifest @iconArgs @refs (Join-Path $dir 'ClockApp.cs')
 if ($LASTEXITCODE -ne 0) { throw 'compile failed' }
 "built: $out"

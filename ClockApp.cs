@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Management;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -565,6 +566,72 @@ namespace DeskClock
             return 0;
         }
 
+        public static int CpuTemperature()
+        {
+            try
+            {
+                double max = double.MinValue;
+                bool found = false;
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    "root\\WMI", "SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature"))
+                {
+                    foreach (ManagementBaseObject item in searcher.Get())
+                    {
+                        try
+                        {
+                            double celsius = Convert.ToDouble(item["CurrentTemperature"]) / 10.0 - 273.15;
+                            if (celsius > max) max = celsius;
+                            found = true;
+                        }
+                        finally
+                        {
+                            item.Dispose();
+                        }
+                    }
+                }
+                if (found && max > -50 && max < 150) return (int)Math.Round(max);
+            }
+            catch { }
+            return int.MinValue;
+        }
+
+        public static void GpuStats(out int usage, out int temperature)
+        {
+            usage = int.MinValue;
+            temperature = int.MinValue;
+            try
+            {
+                string exe = Path.Combine(Environment.SystemDirectory, "nvidia-smi.exe");
+                if (!File.Exists(exe)) return;
+
+                System.Diagnostics.ProcessStartInfo info = new System.Diagnostics.ProcessStartInfo();
+                info.FileName = exe;
+                info.Arguments = "--query-gpu=utilization.gpu,temperature.gpu --format=csv,noheader,nounits";
+                info.UseShellExecute = false;
+                info.CreateNoWindow = true;
+                info.RedirectStandardOutput = true;
+                info.RedirectStandardError = true;
+
+                using (System.Diagnostics.Process process = new System.Diagnostics.Process())
+                {
+                    process.StartInfo = info;
+                    process.Start();
+                    string output = process.StandardOutput.ReadToEnd();
+                    if (!process.WaitForExit(2000))
+                    {
+                        try { process.Kill(); } catch { }
+                        return;
+                    }
+                    string first = output.Trim().Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)[0];
+                    string[] parts = first.Split(',');
+                    int value;
+                    if (parts.Length > 0 && int.TryParse(parts[0].Trim(), out value)) usage = value;
+                    if (parts.Length > 1 && int.TryParse(parts[1].Trim(), out value)) temperature = value;
+                }
+            }
+            catch { }
+        }
+
         public static TimeSpan Uptime()
         {
             return TimeSpan.FromMilliseconds((double)GetTickCount64());
@@ -964,7 +1031,7 @@ namespace DeskClock
 
     public sealed class ClockWindow : Window
     {
-        private TextBlock hh, mm, ss, payLabel, payValue, payDaily, payToday, customCountdown, dateLine, upLine, cpuLine, memLine, netLine;
+        private TextBlock hh, mm, ss, payLabel, payValue, payDaily, payToday, customCountdown, dateLine, upLine, cpuLine, gpuLine, memLine, netLine;
         private double dailyEarn;
         private DispatcherTimer fastTimer, slowTimer;
         private IntPtr myHwnd;
@@ -1298,12 +1365,14 @@ namespace DeskClock
             restLine = Line();
             upLine = Line();
             cpuLine = Line();
+            gpuLine = Line();
             memLine = Line();
             netLine = Line();
             sp.Children.Add(dateLine);
             sp.Children.Add(restLine);
             sp.Children.Add(upLine);
             sp.Children.Add(cpuLine);
+            sp.Children.Add(gpuLine);
             sp.Children.Add(memLine);
             sp.Children.Add(netLine);
             Border b = TileShell();
@@ -1390,6 +1459,16 @@ namespace DeskClock
             return elapsed / (end - start);
         }
 
+        private static string FormatMetric(int value)
+        {
+            return value == int.MinValue ? "--" : value + "%";
+        }
+
+        private static string FormatTemperature(int value)
+        {
+            return value == int.MinValue ? " --" : " " + value + "°C";
+        }
+
         private void RefreshSys()
         {
             System.Threading.ThreadPool.QueueUserWorkItem(delegate
@@ -1400,6 +1479,9 @@ namespace DeskClock
                     SysInfo.NetRates(out u, out d);
                     upRate = u; downRate = d;
                     int cpu = SysInfo.CpuPercent();
+                    int cpuTemp = SysInfo.CpuTemperature();
+                    int gpuUsage, gpuTemp;
+                    SysInfo.GpuStats(out gpuUsage, out gpuTemp);
                     int mem = SysInfo.MemPercent();
                     TimeSpan up = SysInfo.Uptime();
                     Dispatcher.BeginInvoke((Action)delegate
@@ -1409,7 +1491,8 @@ namespace DeskClock
                     restLine.Text = RestCountdown(now);
                     RefreshCountdown();
                     upLine.Text = "开机:" + (int)up.TotalHours + "时" + up.Minutes + "分" + up.Seconds + "秒";
-                        cpuLine.Text = "CPU:" + cpu + " %";
+                        cpuLine.Text = "CPU:" + cpu + "%" + FormatTemperature(cpuTemp);
+                        gpuLine.Text = "GPU:" + FormatMetric(gpuUsage) + FormatTemperature(gpuTemp);
                         memLine.Text = "内存:" + mem + " %";
                         netLine.Text = "↑:" + SysInfo.FmtRate(upRate) + " ↓:" + SysInfo.FmtRate(downRate);
                     });
