@@ -20,9 +20,17 @@ $refs = @('System.dll','System.Core.dll','System.Drawing.dll','System.Management
         ForEach-Object { '/r:' + (Find-Asm $_) }
 $icon = Join-Path $dir 'app.ico'
 $manifest = Join-Path $dir 'app.manifest'
+$libre = Join-Path $dir 'LibreHardwareMonitorLib.dll'
+$hid = Join-Path $dir 'HidSharp.dll'
 if (!(Test-Path $icon)) { & (Join-Path $dir 'make-icon.ps1') | Out-Null }
 $iconArgs = @(('/win32icon:' + $icon), ('/resource:' + $icon + ',AppIcon.ico'))
+$libArgs = @(
+  ('/r:' + $libre),
+  ('/r:' + $hid),
+  ('/resource:' + $libre + ',LibreHardwareMonitorLib.dll'),
+  ('/resource:' + $hid + ',HidSharp.dll')
+)
 
-& $csc /nologo /noconfig /optimize+ /target:winexe /platform:anycpu /out:$out /win32manifest:$manifest @iconArgs @refs (Join-Path $dir 'ClockApp.cs')
+& $csc /nologo /noconfig /optimize+ /target:winexe /platform:anycpu /out:$out /win32manifest:$manifest @iconArgs @libArgs @refs (Join-Path $dir 'ClockApp.cs')
 if ($LASTEXITCODE -ne 0) { throw 'package failed' }
 "packaged: $out"

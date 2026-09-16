@@ -71,3 +71,5 @@ dist/DeskClockPlus.exe
 ## License
 
 MIT
+
+See `THIRD_PARTY_NOTICES.md` for bundled sensor library licenses.

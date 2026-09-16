@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Management;
 using System.Net;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Web.Script.Serialization;
@@ -492,6 +493,53 @@ namespace DeskClock
         }
     }
 
+    internal static class LibreCpuMonitor
+    {
+        private static readonly object SyncRoot = new object();
+        private static LibreHardwareMonitor.Hardware.Computer computer;
+        private static bool failed;
+
+        public static int CpuTemperature()
+        {
+            if (failed) return int.MinValue;
+            lock (SyncRoot)
+            {
+                try
+                {
+                    if (computer == null)
+                    {
+                        computer = new LibreHardwareMonitor.Hardware.Computer();
+                        computer.IsCpuEnabled = true;
+                        computer.Open();
+                    }
+
+                    int preferred = int.MinValue;
+                    int maximum = int.MinValue;
+                    foreach (LibreHardwareMonitor.Hardware.IHardware hardware in computer.Hardware)
+                    {
+                        if (hardware.HardwareType != LibreHardwareMonitor.Hardware.HardwareType.Cpu) continue;
+                        hardware.Update();
+                        foreach (LibreHardwareMonitor.Hardware.ISensor sensor in hardware.Sensors)
+                        {
+                            if (sensor.SensorType != LibreHardwareMonitor.Hardware.SensorType.Temperature || !sensor.Value.HasValue) continue;
+                            int value = (int)Math.Round(sensor.Value.Value);
+                            if (value < -50 || value > 150) continue;
+                            if (value > maximum) maximum = value;
+                            if (sensor.Name != null && sensor.Name.IndexOf("Tctl", StringComparison.OrdinalIgnoreCase) >= 0) preferred = value;
+                        }
+                    }
+                    if (preferred != int.MinValue) return preferred;
+                    return maximum;
+                }
+                catch
+                {
+                    failed = true;
+                    return int.MinValue;
+                }
+            }
+        }
+    }
+
     internal static class SysInfo
     {
         internal static void Log(string msg)
@@ -568,6 +616,10 @@ namespace DeskClock
 
         public static int CpuTemperature()
         {
+            int libre = LibreCpuMonitor.CpuTemperature();
+            if (libre != int.MinValue) return libre;
+            int lenovo = LenovoCpuTemperature();
+            if (lenovo != int.MinValue) return lenovo;
             try
             {
                 double max = double.MinValue;
@@ -593,6 +645,58 @@ namespace DeskClock
             }
             catch { }
             return int.MinValue;
+        }
+
+        private static int LenovoCpuTemperature()
+        {
+            try
+            {
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    "root\\WMI", "SELECT * FROM LENOVO_GAMEZONE_DATA"))
+                {
+                    foreach (ManagementObject item in searcher.Get())
+                    {
+                        try
+                        {
+                            using (ManagementBaseObject result = item.InvokeMethod("GetCPUTemp", null, null))
+                            {
+                                if (result == null) continue;
+                                int value = Convert.ToInt32(result["Data"]);
+                                if (value > 0 && value < 150) { LogCpuTempSuccess(value, "instance"); return value; }
+                            }
+                        }
+                        finally
+                        {
+                            item.Dispose();
+                        }
+                    }
+                }
+            }
+            catch { }
+            try
+            {
+                using (ManagementClass cls = new ManagementClass("root\\WMI", "LENOVO_GAMEZONE_DATA", null))
+                using (ManagementBaseObject input = cls.GetMethodParameters("GetCPUTemp"))
+                using (ManagementBaseObject result = cls.InvokeMethod("GetCPUTemp", input, null))
+                {
+                    if (result != null)
+                    {
+                        int value = Convert.ToInt32(result["Data"]);
+                        if (value > 0 && value < 150) { LogCpuTempSuccess(value, "class"); return value; }
+                    }
+                }
+            }
+            catch { }
+            return int.MinValue;
+        }
+
+        private static bool cpuTempLogged;
+
+        private static void LogCpuTempSuccess(int value, string source)
+        {
+            if (cpuTempLogged) return;
+            cpuTempLogged = true;
+            Log("CPU temperature source=" + source + " value=" + value);
         }
 
         public static void GpuStats(out int usage, out int temperature)
@@ -1939,9 +2043,23 @@ namespace DeskClock
 
     public static class Program
     {
+        private static Assembly ResolveEmbeddedAssembly(object sender, ResolveEventArgs args)
+        {
+            string name = new AssemblyName(args.Name).Name + ".dll";
+            if (name != "LibreHardwareMonitorLib.dll" && name != "HidSharp.dll") return null;
+            using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
+            {
+                if (stream == null) return null;
+                byte[] data = new byte[stream.Length];
+                stream.Read(data, 0, data.Length);
+                return Assembly.Load(data);
+            }
+        }
+
         [STAThread]
         public static void Main()
         {
+            AppDomain.CurrentDomain.AssemblyResolve += ResolveEmbeddedAssembly;
             bool created;
             System.Threading.Mutex mutex = new System.Threading.Mutex(true, "DeskClockPlus.SingleInstance", out created);
             if (!created) return;
