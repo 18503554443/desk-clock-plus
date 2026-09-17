@@ -24,6 +24,7 @@ namespace DeskClock
         public static int PayHour = 0;
         public static int PayMinute = 0;
         public static double PayAmount = 0;
+        public static double PayMonths = 12;
         public static int WorkStartHour = 9;
         public static int WorkStartMinute = 0;
         public static int WorkEndHour = 18;
@@ -78,6 +79,11 @@ namespace DeskClock
                         double dv;
                         if (double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out dv) && dv >= 0) PayAmount = dv;
                     }
+                    else if (k == "payMonths")
+                    {
+                        double dv;
+                        if (double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out dv) && dv >= 1 && dv <= 36) PayMonths = dv;
+                    }
                     else if (k == "workStart")
                     {
                         int wh, wm;
@@ -123,6 +129,7 @@ namespace DeskClock
                     "payHour=" + PayHour + Environment.NewLine +
                     "payMinute=" + PayMinute + Environment.NewLine +
                     "payAmount=" + PayAmount.ToString("0.00", CultureInfo.InvariantCulture) + Environment.NewLine +
+                    "payMonths=" + PayMonths.ToString("0.##", CultureInfo.InvariantCulture) + Environment.NewLine +
                     "workStart=" + WorkStartHour.ToString("00") + ":" + WorkStartMinute.ToString("00") + Environment.NewLine +
                     "workEnd=" + WorkEndHour.ToString("00") + ":" + WorkEndMinute.ToString("00") + Environment.NewLine);
                 if (HolidaysRaw.Length > 0) File.AppendAllText(FilePath(), "holidays=" + HolidaysRaw + Environment.NewLine);
@@ -887,6 +894,7 @@ namespace DeskClock
         private TextBox dayBox;
         private TextBox timeBox;
         private TextBox amtBox;
+        private TextBox monthsBox;
         private TextBox workStartBox;
         private TextBox workEndBox;
 
@@ -896,13 +904,14 @@ namespace DeskClock
             WindowStyle = WindowStyle.ToolWindow;
             ResizeMode = ResizeMode.NoResize;
             Width = 320;
-            Height = 310;
+            Height = 340;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             Topmost = true;
             Background = new SolidColorBrush(Color.FromRgb(0x24, 0x27, 0x2b));
 
             Grid g = new Grid();
             g.Margin = new Thickness(14);
+            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -916,11 +925,13 @@ namespace DeskClock
             TextBlock l1 = new TextBlock { Text = "发薪日", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
             TextBlock l2 = new TextBlock { Text = "到账时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
             TextBlock l3 = new TextBlock { Text = "月薪(元)", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
-            TextBlock l4 = new TextBlock { Text = "上班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
-            TextBlock l5 = new TextBlock { Text = "下班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l4 = new TextBlock { Text = "年薪月数", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l5 = new TextBlock { Text = "上班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l6 = new TextBlock { Text = "下班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
             dayBox = new TextBox { Text = Config.PayDay.ToString(), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             timeBox = new TextBox { Text = Config.PayHour.ToString("00") + ":" + Config.PayMinute.ToString("00"), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             amtBox = new TextBox { Text = Config.PayAmount > 0 ? Config.PayAmount.ToString("0.00", CultureInfo.InvariantCulture) : "", VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
+            monthsBox = new TextBox { Text = Config.PayMonths.ToString("0.##", CultureInfo.InvariantCulture), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             workStartBox = new TextBox { Text = Config.WorkStartHour.ToString("00") + ":" + Config.WorkStartMinute.ToString("00"), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             workEndBox = new TextBox { Text = Config.WorkEndHour.ToString("00") + ":" + Config.WorkEndMinute.ToString("00"), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             Grid.SetRow(l1, 0); Grid.SetColumn(l1, 0);
@@ -930,18 +941,20 @@ namespace DeskClock
             Grid.SetRow(l3, 2); Grid.SetColumn(l3, 0);
             Grid.SetRow(amtBox, 2); Grid.SetColumn(amtBox, 1);
             Grid.SetRow(l4, 3); Grid.SetColumn(l4, 0);
-            Grid.SetRow(workStartBox, 3); Grid.SetColumn(workStartBox, 1);
+            Grid.SetRow(monthsBox, 3); Grid.SetColumn(monthsBox, 1);
             Grid.SetRow(l5, 4); Grid.SetColumn(l5, 0);
-            Grid.SetRow(workEndBox, 4); Grid.SetColumn(workEndBox, 1);
+            Grid.SetRow(workStartBox, 4); Grid.SetColumn(workStartBox, 1);
+            Grid.SetRow(l6, 5); Grid.SetColumn(l6, 0);
+            Grid.SetRow(workEndBox, 5); Grid.SetColumn(workEndBox, 1);
 
             Button ok = new Button { Content = "保存", Width = 80, Height = 28, HorizontalAlignment = HorizontalAlignment.Right };
             ok.Click += delegate { TrySave(); };
-            Grid.SetRow(ok, 5); Grid.SetColumn(ok, 1);
+            Grid.SetRow(ok, 6); Grid.SetColumn(ok, 1);
             ok.VerticalAlignment = VerticalAlignment.Bottom;
 
             g.Children.Add(l1); g.Children.Add(l2); g.Children.Add(dayBox); g.Children.Add(timeBox); g.Children.Add(ok);
-            g.Children.Add(l3); g.Children.Add(amtBox); g.Children.Add(l4); g.Children.Add(workStartBox);
-            g.Children.Add(l5); g.Children.Add(workEndBox);
+            g.Children.Add(l3); g.Children.Add(amtBox); g.Children.Add(l4); g.Children.Add(monthsBox);
+            g.Children.Add(l5); g.Children.Add(workStartBox); g.Children.Add(l6); g.Children.Add(workEndBox);
             Content = g;
         }
 
@@ -956,6 +969,7 @@ namespace DeskClock
             int h = 0, mi = 0;
             int wsH = 0, wsM = 0, weH = 0, weM = 0;
             double amt = 0;
+            double months = 12;
             string t = timeBox.Text.Trim();
             if (t.Length > 0 && !Config.TryParseTime(t, out h, out mi))
             {
@@ -986,7 +1000,13 @@ namespace DeskClock
                     return;
                 }
             }
+            if (!double.TryParse(monthsBox.Text.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out months) || months < 1 || months > 36)
+            {
+                MessageBox.Show("年薪月数请填 1-36，例如 13", "提示");
+                return;
+            }
             Config.PayDay = d; Config.PayHour = h; Config.PayMinute = mi; Config.PayAmount = amt;
+            Config.PayMonths = months;
             Config.WorkStartHour = wsH; Config.WorkStartMinute = wsM;
             Config.WorkEndHour = weH; Config.WorkEndMinute = weM;
             Config.Save();
@@ -1581,8 +1601,9 @@ namespace DeskClock
             if (Config.PayAmount > 0)
             {
                 int workdays = HolidayCalendar.WorkdayCountInMonth(now.Year, now.Month);
-                dailyEarn = workdays > 0 ? Config.PayAmount / workdays : 0;
-                payDaily.Text = "日薪 ¥" + dailyEarn.ToString("0.00");
+                double averageMonthly = Config.PayAmount * Config.PayMonths / 12.0;
+                dailyEarn = workdays > 0 ? averageMonthly / workdays : 0;
+                payDaily.Text = (Math.Abs(Config.PayMonths - 12) < 0.001 ? "日薪 ¥" : Config.PayMonths.ToString("0.##") + "薪日薪 ¥") + dailyEarn.ToString("0.00");
                 if (!HolidayCalendar.IsWorkday(now))
                 {
                     payToday.Text = "今日不计薪";
