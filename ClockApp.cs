@@ -1603,7 +1603,7 @@ namespace DeskClock
                 int workdays = HolidayCalendar.WorkdayCountInMonth(now.Year, now.Month);
                 double averageMonthly = Config.PayAmount * Config.PayMonths / 12.0;
                 dailyEarn = workdays > 0 ? averageMonthly / workdays : 0;
-                payDaily.Text = (Math.Abs(Config.PayMonths - 12) < 0.001 ? "日薪 ¥" : Config.PayMonths.ToString("0.##") + "薪日薪 ¥") + dailyEarn.ToString("0.00");
+                payDaily.Text = "日薪 ¥" + dailyEarn.ToString("0.00");
                 if (!HolidayCalendar.IsWorkday(now))
                 {
                     payToday.Text = "今日不计薪";
