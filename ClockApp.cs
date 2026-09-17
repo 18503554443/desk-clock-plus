@@ -204,8 +204,7 @@ namespace DeskClock
 
     internal static class StartupManager
     {
-        private const string RunKey = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-        private const string ValueName = "DeskClockPlus";
+        private const string TaskName = "DeskClockPlusAutoStart";
 
         public static string ExecutablePath()
         {
@@ -215,26 +214,44 @@ namespace DeskClock
 
         public static bool IsEnabled()
         {
-            try
-            {
-                using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey, false))
-                {
-                    if (key == null) return false;
-                    string value = Convert.ToString(key.GetValue(ValueName));
-                    return string.Equals(value, "\"" + ExecutablePath() + "\"", StringComparison.OrdinalIgnoreCase);
-                }
-            }
-            catch { return false; }
+            return RunSchtasks("/Query /TN \"" + TaskName + "\"") == 0;
         }
 
         public static void SetEnabled(bool enabled)
         {
-            using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RunKey))
+            if (enabled)
             {
-                if (key == null) return;
-                if (enabled) key.SetValue(ValueName, "\"" + ExecutablePath() + "\"");
-                else key.DeleteValue(ValueName, false);
+                string target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DeskClockPlus", "DeskClockPlus.exe");
+                string dir = Path.GetDirectoryName(target);
+                Directory.CreateDirectory(dir);
+                if (!string.Equals(ExecutablePath(), target, StringComparison.OrdinalIgnoreCase)) File.Copy(ExecutablePath(), target, true);
+                string arguments = "/Create /TN \"" + TaskName + "\" /TR \"\\\"" + target + "\\\"\" /SC ONLOGON /RL HIGHEST /F";
+                if (RunSchtasks(arguments) != 0) throw new InvalidOperationException("failed to create startup task");
             }
+            else
+            {
+                RunSchtasks("/Delete /TN \"" + TaskName + "\" /F");
+            }
+        }
+
+        private static int RunSchtasks(string arguments)
+        {
+            try
+            {
+                System.Diagnostics.ProcessStartInfo info = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "schtasks.exe"), arguments);
+                info.UseShellExecute = false;
+                info.CreateNoWindow = true;
+                info.RedirectStandardOutput = true;
+                info.RedirectStandardError = true;
+                using (System.Diagnostics.Process process = System.Diagnostics.Process.Start(info))
+                {
+                    process.StandardOutput.ReadToEnd();
+                    process.StandardError.ReadToEnd();
+                    process.WaitForExit(10000);
+                    return process.HasExited ? process.ExitCode : -1;
+                }
+            }
+            catch { return -1; }
         }
     }
 
