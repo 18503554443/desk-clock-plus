@@ -25,6 +25,7 @@ namespace DeskClock
         public static int PayMinute = 0;
         public static double PayAmount = 0;
         public static double PayMonths = 12;
+        public static int RentDay = 0;
         public static int WorkStartHour = 9;
         public static int WorkStartMinute = 0;
         public static int WorkEndHour = 18;
@@ -84,6 +85,7 @@ namespace DeskClock
                         double dv;
                         if (double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out dv) && dv >= 1 && dv <= 36) PayMonths = dv;
                     }
+                    else if (k == "rentDay" && int.TryParse(v, out n) && n >= 1 && n <= 31) RentDay = n;
                     else if (k == "workStart")
                     {
                         int wh, wm;
@@ -130,6 +132,7 @@ namespace DeskClock
                     "payMinute=" + PayMinute + Environment.NewLine +
                     "payAmount=" + PayAmount.ToString("0.00", CultureInfo.InvariantCulture) + Environment.NewLine +
                     "payMonths=" + PayMonths.ToString("0.##", CultureInfo.InvariantCulture) + Environment.NewLine +
+                    "rentDay=" + RentDay + Environment.NewLine +
                     "workStart=" + WorkStartHour.ToString("00") + ":" + WorkStartMinute.ToString("00") + Environment.NewLine +
                     "workEnd=" + WorkEndHour.ToString("00") + ":" + WorkEndMinute.ToString("00") + Environment.NewLine);
                 if (HolidaysRaw.Length > 0) File.AppendAllText(FilePath(), "holidays=" + HolidaysRaw + Environment.NewLine);
@@ -895,6 +898,7 @@ namespace DeskClock
         private TextBox timeBox;
         private TextBox amtBox;
         private TextBox monthsBox;
+        private TextBox rentDayBox;
         private TextBox workStartBox;
         private TextBox workEndBox;
 
@@ -904,13 +908,14 @@ namespace DeskClock
             WindowStyle = WindowStyle.ToolWindow;
             ResizeMode = ResizeMode.NoResize;
             Width = 320;
-            Height = 340;
+            Height = 370;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             Topmost = true;
             Background = new SolidColorBrush(Color.FromRgb(0x24, 0x27, 0x2b));
 
             Grid g = new Grid();
             g.Margin = new Thickness(14);
+            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -926,12 +931,14 @@ namespace DeskClock
             TextBlock l2 = new TextBlock { Text = "到账时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
             TextBlock l3 = new TextBlock { Text = "月薪(元)", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
             TextBlock l4 = new TextBlock { Text = "年薪月数", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
-            TextBlock l5 = new TextBlock { Text = "上班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
-            TextBlock l6 = new TextBlock { Text = "下班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l5 = new TextBlock { Text = "交房租日", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l6 = new TextBlock { Text = "上班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l7 = new TextBlock { Text = "下班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
             dayBox = new TextBox { Text = Config.PayDay.ToString(), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             timeBox = new TextBox { Text = Config.PayHour.ToString("00") + ":" + Config.PayMinute.ToString("00"), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             amtBox = new TextBox { Text = Config.PayAmount > 0 ? Config.PayAmount.ToString("0.00", CultureInfo.InvariantCulture) : "", VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             monthsBox = new TextBox { Text = Config.PayMonths.ToString("0.##", CultureInfo.InvariantCulture), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
+            rentDayBox = new TextBox { Text = Config.RentDay > 0 ? Config.RentDay.ToString() : "", VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             workStartBox = new TextBox { Text = Config.WorkStartHour.ToString("00") + ":" + Config.WorkStartMinute.ToString("00"), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             workEndBox = new TextBox { Text = Config.WorkEndHour.ToString("00") + ":" + Config.WorkEndMinute.ToString("00"), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             Grid.SetRow(l1, 0); Grid.SetColumn(l1, 0);
@@ -943,18 +950,21 @@ namespace DeskClock
             Grid.SetRow(l4, 3); Grid.SetColumn(l4, 0);
             Grid.SetRow(monthsBox, 3); Grid.SetColumn(monthsBox, 1);
             Grid.SetRow(l5, 4); Grid.SetColumn(l5, 0);
-            Grid.SetRow(workStartBox, 4); Grid.SetColumn(workStartBox, 1);
+            Grid.SetRow(rentDayBox, 4); Grid.SetColumn(rentDayBox, 1);
             Grid.SetRow(l6, 5); Grid.SetColumn(l6, 0);
-            Grid.SetRow(workEndBox, 5); Grid.SetColumn(workEndBox, 1);
+            Grid.SetRow(workStartBox, 5); Grid.SetColumn(workStartBox, 1);
+            Grid.SetRow(l7, 6); Grid.SetColumn(l7, 0);
+            Grid.SetRow(workEndBox, 6); Grid.SetColumn(workEndBox, 1);
 
             Button ok = new Button { Content = "保存", Width = 80, Height = 28, HorizontalAlignment = HorizontalAlignment.Right };
             ok.Click += delegate { TrySave(); };
-            Grid.SetRow(ok, 6); Grid.SetColumn(ok, 1);
+            Grid.SetRow(ok, 7); Grid.SetColumn(ok, 1);
             ok.VerticalAlignment = VerticalAlignment.Bottom;
 
             g.Children.Add(l1); g.Children.Add(l2); g.Children.Add(dayBox); g.Children.Add(timeBox); g.Children.Add(ok);
             g.Children.Add(l3); g.Children.Add(amtBox); g.Children.Add(l4); g.Children.Add(monthsBox);
-            g.Children.Add(l5); g.Children.Add(workStartBox); g.Children.Add(l6); g.Children.Add(workEndBox);
+            g.Children.Add(l5); g.Children.Add(rentDayBox); g.Children.Add(l6); g.Children.Add(workStartBox);
+            g.Children.Add(l7); g.Children.Add(workEndBox);
             Content = g;
         }
 
@@ -970,6 +980,7 @@ namespace DeskClock
             int wsH = 0, wsM = 0, weH = 0, weM = 0;
             double amt = 0;
             double months = 12;
+            int rentDay = 0;
             string t = timeBox.Text.Trim();
             if (t.Length > 0 && !Config.TryParseTime(t, out h, out mi))
             {
@@ -1005,8 +1016,15 @@ namespace DeskClock
                 MessageBox.Show("年薪月数请填 1-36，例如 13", "提示");
                 return;
             }
+            string rentText = rentDayBox.Text.Trim();
+            if (rentText.Length > 0 && (!int.TryParse(rentText, out rentDay) || rentDay < 1 || rentDay > 31))
+            {
+                MessageBox.Show("交房租日请填 1-31，留空表示不设置", "提示");
+                return;
+            }
             Config.PayDay = d; Config.PayHour = h; Config.PayMinute = mi; Config.PayAmount = amt;
             Config.PayMonths = months;
+            Config.RentDay = rentDay;
             Config.WorkStartHour = wsH; Config.WorkStartMinute = wsM;
             Config.WorkEndHour = weH; Config.WorkEndMinute = weM;
             Config.Save();
@@ -1192,7 +1210,7 @@ namespace DeskClock
 
     public sealed class ClockWindow : Window
     {
-        private TextBlock hh, mm, ss, payLabel, payValue, payDaily, payToday, customCountdown, dateLine, upLine, cpuLine, gpuLine, memLine, netLine;
+        private TextBlock hh, mm, ss, payLabel, payValue, payDaily, payToday, customCountdown, rentLine, dateLine, upLine, cpuLine, gpuLine, memLine, netLine;
         private double dailyEarn;
         private DispatcherTimer fastTimer, slowTimer;
         private IntPtr myHwnd;
@@ -1519,11 +1537,14 @@ namespace DeskClock
             payToday.Margin = new Thickness(0, 4, 0, 0);
             customCountdown = new TextBlock { Text = "", FontFamily = Yahei, FontSize = 19, Foreground = Hex("#F0C674"), TextAlignment = TextAlignment.Center };
             customCountdown.Margin = new Thickness(0, 6, 0, 0);
+            rentLine = new TextBlock { Text = "", FontFamily = Yahei, FontSize = 19, Foreground = Hex("#F0A85A"), TextAlignment = TextAlignment.Center };
+            rentLine.Margin = new Thickness(0, 4, 0, 0);
             sp.Children.Add(payLabel);
             sp.Children.Add(payValue);
             sp.Children.Add(payDaily);
             sp.Children.Add(payToday);
             sp.Children.Add(customCountdown);
+            sp.Children.Add(rentLine);
             Border b = TileShell();
             b.Child = sp;
             return b;
@@ -1620,6 +1641,28 @@ namespace DeskClock
                 payDaily.Text = "未设置薪资";
                 payToday.Text = "";
             }
+            RefreshRent();
+        }
+
+        private void RefreshRent()
+        {
+            if (rentLine == null) return;
+            if (Config.RentDay <= 0)
+            {
+                rentLine.Text = "";
+                return;
+            }
+            DateTime today = DateTime.Today;
+            int day = Math.Min(Config.RentDay, DateTime.DaysInMonth(today.Year, today.Month));
+            DateTime target = new DateTime(today.Year, today.Month, day);
+            if (target < today)
+            {
+                DateTime next = today.AddMonths(1);
+                day = Math.Min(Config.RentDay, DateTime.DaysInMonth(next.Year, next.Month));
+                target = new DateTime(next.Year, next.Month, day);
+            }
+            int days = (target - today).Days;
+            rentLine.Text = days == 0 ? "今天交房租" : "距交房租 " + days + "天";
         }
 
         private static double WorkDayProgress(DateTime now)
