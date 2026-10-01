@@ -540,25 +540,44 @@ namespace DeskClock
         }
     }
 
-    internal static class LibreCpuMonitor
+    internal static class LibreMonitor
     {
         private static readonly object SyncRoot = new object();
         private static LibreHardwareMonitor.Hardware.Computer computer;
-        private static bool failed;
+        private static bool openFailed;
+        private static bool cpuFailed;
+        private static bool gpuFailed;
+        private static bool gpuLogged;
+
+        private static bool EnsureOpen()
+        {
+            if (openFailed) return false;
+            if (computer != null) return true;
+            try
+            {
+                LibreHardwareMonitor.Hardware.Computer created = new LibreHardwareMonitor.Hardware.Computer();
+                created.IsCpuEnabled = true;
+                created.IsGpuEnabled = true;
+                created.Open();
+                computer = created;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                openFailed = true;
+                SysInfo.Log("libre open failed: " + ex.Message);
+                return false;
+            }
+        }
 
         public static int CpuTemperature()
         {
-            if (failed) return int.MinValue;
+            if (cpuFailed) return int.MinValue;
             lock (SyncRoot)
             {
                 try
                 {
-                    if (computer == null)
-                    {
-                        computer = new LibreHardwareMonitor.Hardware.Computer();
-                        computer.IsCpuEnabled = true;
-                        computer.Open();
-                    }
+                    if (!EnsureOpen()) return int.MinValue;
 
                     int preferred = int.MinValue;
                     int maximum = int.MinValue;
@@ -578,10 +597,115 @@ namespace DeskClock
                     if (preferred != int.MinValue) return preferred;
                     return maximum;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    failed = true;
+                    cpuFailed = true;
+                    SysInfo.Log("libre cpu failed: " + ex.Message);
                     return int.MinValue;
+                }
+            }
+        }
+
+        // Reads usage/temperature from the first discrete GPU through LibreHardwareMonitor,
+        // which covers AMD (ADL), NVIDIA (NVAPI) and Intel GPUs. The nvidia-smi based path
+        // in SysInfo only ever worked on NVIDIA machines, so AMD cards showed nothing.
+        public static void GpuStats(out int usage, out int temperature)
+        {
+            usage = int.MinValue;
+            temperature = int.MinValue;
+            if (gpuFailed) return;
+            lock (SyncRoot)
+            {
+                try
+                {
+                    if (!EnsureOpen()) return;
+
+                    foreach (LibreHardwareMonitor.Hardware.IHardware hardware in computer.Hardware)
+                    {
+                        if (hardware.HardwareType != LibreHardwareMonitor.Hardware.HardwareType.GpuNvidia &&
+                            hardware.HardwareType != LibreHardwareMonitor.Hardware.HardwareType.GpuAmd &&
+                            hardware.HardwareType != LibreHardwareMonitor.Hardware.HardwareType.GpuIntel) continue;
+
+                        int load = int.MinValue;
+                        int otherLoad = int.MinValue;
+                        int core = int.MinValue;
+                        int otherCore = int.MinValue;
+
+                        try
+                        {
+                            hardware.Update();
+                            foreach (LibreHardwareMonitor.Hardware.ISensor sensor in hardware.Sensors)
+                            {
+                                if (!sensor.Value.HasValue) continue;
+                                double raw = sensor.Value.Value;
+                                if (double.IsNaN(raw)) continue;
+                                string name = sensor.Name == null ? "" : sensor.Name;
+
+                                if (sensor.SensorType == LibreHardwareMonitor.Hardware.SensorType.Load)
+                                {
+                                    int value = (int)Math.Round(raw);
+                                    if (value < 0 || value > 100) continue;
+                                    if (name.IndexOf("GPU Core", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        if (load == int.MinValue) load = value;
+                                    }
+                                    else if (otherLoad == int.MinValue)
+                                    {
+                                        otherLoad = value;
+                                    }
+                                }
+                                else if (sensor.SensorType == LibreHardwareMonitor.Hardware.SensorType.Temperature)
+                                {
+                                    int value = (int)Math.Round(raw);
+                                    if (value < -50 || value > 150) continue;
+                                    if (name.IndexOf("Hot Spot", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                                    if (name.IndexOf("Junction", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                                    if (name.IndexOf("Core", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        if (core == int.MinValue) core = value;
+                                    }
+                                    else if (otherCore == int.MinValue)
+                                    {
+                                        otherCore = value;
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            SysInfo.Log("libre gpu sensor failed: " + ex.Message);
+                        }
+
+                        if (load == int.MinValue) load = otherLoad;
+                        if (core == int.MinValue) core = otherCore;
+                        if (load == int.MinValue && core == int.MinValue) continue;
+
+                        usage = load;
+                        temperature = core;
+
+                        if (!gpuLogged)
+                        {
+                            gpuLogged = true;
+                            string hardwareName;
+                            try { hardwareName = hardware.Name; }
+                            catch { hardwareName = "unknown"; }
+                            SysInfo.Log("GPU source=libre name=" + hardwareName + " usage=" + usage + " temp=" + temperature);
+                        }
+                        return;
+                    }
+
+                    if (!gpuLogged)
+                    {
+                        gpuLogged = true;
+                        SysInfo.Log("GPU source=libre no gpu hardware found");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    gpuFailed = true;
+                    usage = int.MinValue;
+                    temperature = int.MinValue;
+                    SysInfo.Log("libre gpu failed: " + ex.Message);
                 }
             }
         }
@@ -663,7 +787,7 @@ namespace DeskClock
 
         public static int CpuTemperature()
         {
-            int libre = LibreCpuMonitor.CpuTemperature();
+            int libre = LibreMonitor.CpuTemperature();
             if (libre != int.MinValue) return libre;
             int lenovo = LenovoCpuTemperature();
             if (lenovo != int.MinValue) return lenovo;
@@ -747,6 +871,20 @@ namespace DeskClock
         }
 
         public static void GpuStats(out int usage, out int temperature)
+        {
+            usage = int.MinValue;
+            temperature = int.MinValue;
+
+            LibreMonitor.GpuStats(out usage, out temperature);
+            if (usage != int.MinValue && temperature != int.MinValue) return;
+
+            int smiUsage, smiTemperature;
+            NvidiaSmiGpuStats(out smiUsage, out smiTemperature);
+            if (usage == int.MinValue) usage = smiUsage;
+            if (temperature == int.MinValue) temperature = smiTemperature;
+        }
+
+        private static void NvidiaSmiGpuStats(out int usage, out int temperature)
         {
             usage = int.MinValue;
             temperature = int.MinValue;
