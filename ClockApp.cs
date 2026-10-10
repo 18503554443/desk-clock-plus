@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Management;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -965,37 +966,8 @@ namespace DeskClock
             return TimeSpan.FromMilliseconds((double)GetTickCount64());
         }
 
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        private struct MIB_IFROW
-        {
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string wszName;
-            public uint dwIndex;
-            public uint dwType;
-            public uint dwMtu;
-            public uint dwSpeed;
-            public uint dwPhysAddrLen;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)] public byte[] bPhysAddr;
-            public uint dwAdminStatus;
-            public uint dwOperStatus;
-            public uint dwLastChange;
-            public uint dwInOctets;
-            public uint dwInUcastPkts;
-            public uint dwInNUcastPkts;
-            public uint dwInDiscards;
-            public uint dwInErrors;
-            public uint dwInUnknownProtos;
-            public uint dwOutOctets;
-            public uint dwOutUcastPkts;
-            public uint dwOutNUcastPkts;
-            public uint dwOutDiscards;
-            public uint dwOutErrors;
-            public uint dwOutQLen;
-            public uint dwDescrLen;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)] public byte[] bDescr;
-        }
-
         [DllImport("iphlpapi.dll")]
-        private static extern int GetIfTable(IntPtr pTable, ref uint pdwSize, bool bOrder);
+        private static extern int GetBestInterface(uint dwDestAddr, out uint pdwBestIfIndex);
 
         private static long prevSent = -1, prevRecv = -1;
         private static DateTime prevAt;
@@ -1003,35 +975,56 @@ namespace DeskClock
         private static void NetTotals(out long sent, out long recv)
         {
             sent = 0; recv = 0;
-            uint size = 0;
-            GetIfTable(IntPtr.Zero, ref size, false);
-            if (size == 0) return;
-            IntPtr buf = Marshal.AllocHGlobal((int)size);
-            try
+            uint bestIndex;
+            bool hasBest = GetBestInterface(0, out bestIndex) == 0;
+            bool found = false;
+            foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
             {
-                if (GetIfTable(buf, ref size, false) != 0) return;
-                int n = Marshal.ReadInt32(buf);
-                int rowSize = Marshal.SizeOf(typeof(MIB_IFROW));
-                for (int i = 0; i < n; i++)
+                if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+
+                try
                 {
-                    MIB_IFROW row = (MIB_IFROW)Marshal.PtrToStructure(IntPtr.Add(buf, 4 + i * rowSize), typeof(MIB_IFROW));
-                    if (row.dwOperStatus != 1) continue;   // only interfaces that are up
-                    if (row.dwType == 24) continue;        // skip software loopback
-                    sent += row.dwOutOctets;
-                    recv += row.dwInOctets;
+                    IPv4InterfaceProperties properties = ni.GetIPProperties().GetIPv4Properties();
+                    if (properties == null) continue;
+                    if (hasBest && properties.Index != bestIndex) continue;
+
+                    IPv4InterfaceStatistics stats = ni.GetIPv4Statistics();
+                    sent += stats.BytesSent;
+                    recv += stats.BytesReceived;
+                    found = true;
+                }
+                catch
+                {
                 }
             }
-            finally
+
+            // Some adapters expose counters through a filter/miniport interface.
+            // If the default-route lookup did not match a usable interface, use
+            // the physical interfaces that provide IPv4 statistics.
+            if (!found && hasBest)
             {
-                Marshal.FreeHGlobal(buf);
+                foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                    if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    try
+                    {
+                        IPv4InterfaceStatistics stats = ni.GetIPv4Statistics();
+                        sent += stats.BytesSent;
+                        recv += stats.BytesReceived;
+                    }
+                    catch
+                    {
+                    }
+                }
             }
         }
 
         private static long Delta(long cur, long prev)
         {
             long d = cur - prev;
-            if (d < 0) d += 4294967296L;   // 32-bit counter wrap
-            return d;
+            return d < 0 ? 0 : d;
         }
 
         public static void NetRates(out double up, out double down)
@@ -1942,7 +1935,7 @@ namespace DeskClock
                         cpuLine.Text = "CPU:" + cpu + "%" + FormatTemperature(cpuTemp);
                         gpuLine.Text = "GPU:" + FormatMetric(gpuUsage) + FormatTemperature(gpuTemp);
                         memLine.Text = "内存:" + mem + " %";
-                        netLine.Text = "↑:" + SysInfo.FmtRate(upRate) + " ↓:" + SysInfo.FmtRate(downRate);
+                        netLine.Text = "↑:" + SysInfo.FmtRate(upRate) + "/s ↓:" + SysInfo.FmtRate(downRate) + "/s";
                     });
                 }
                 catch (Exception ex)
