@@ -21,10 +21,13 @@ namespace DeskClock
     internal static class Config
     {
         public static int PayDay = 10;
-        public static int PayHour = 0;
+        public static int PayHour = 18;
         public static int PayMinute = 0;
         public static double PayAmount = 0;
         public static double PayMonths = 12;
+        public static int AttendanceDays = 0;
+        public static string SaturdayMode = "alternate";
+        public static DateTime BigWeekAnchor = new DateTime(2026, 10, 10);
         public static int RentDay = 0;
         public static int WorkStartHour = 9;
         public static int WorkStartMinute = 0;
@@ -72,7 +75,7 @@ namespace DeskClock
                     string k = lines[li].Substring(0, i).Trim();
                     string v = lines[li].Substring(i + 1).Trim();
                     int n;
-                    if (k == "payDay" && int.TryParse(v, out n) && n >= 1 && n <= 28) PayDay = n;
+                    if (k == "payDay" && int.TryParse(v, out n) && n >= 1 && n <= 31) PayDay = n;
                     else if (k == "payHour" && int.TryParse(v, out n) && n >= 0 && n <= 23) PayHour = n;
                     else if (k == "payMinute" && int.TryParse(v, out n) && n >= 0 && n <= 59) PayMinute = n;
                     else if (k == "payAmount")
@@ -84,6 +87,13 @@ namespace DeskClock
                     {
                         double dv;
                         if (double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out dv) && dv >= 1 && dv <= 36) PayMonths = dv;
+                    }
+                    else if (k == "attendanceDays" && int.TryParse(v, out n) && n >= 0 && n <= 31) AttendanceDays = n;
+                    else if (k == "saturdayMode" && (v == "none" || v == "alternate" || v == "all")) SaturdayMode = v;
+                    else if (k == "bigWeekAnchor")
+                    {
+                        DateTime anchor;
+                        if (DateTime.TryParseExact(v, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out anchor)) BigWeekAnchor = anchor.Date;
                     }
                     else if (k == "rentDay" && int.TryParse(v, out n) && n >= 1 && n <= 31) RentDay = n;
                     else if (k == "workStart")
@@ -132,6 +142,9 @@ namespace DeskClock
                     "payMinute=" + PayMinute + Environment.NewLine +
                     "payAmount=" + PayAmount.ToString("0.00", CultureInfo.InvariantCulture) + Environment.NewLine +
                     "payMonths=" + PayMonths.ToString("0.##", CultureInfo.InvariantCulture) + Environment.NewLine +
+                    "attendanceDays=" + AttendanceDays + Environment.NewLine +
+                    "saturdayMode=" + SaturdayMode + Environment.NewLine +
+                    "bigWeekAnchor=" + BigWeekAnchor.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + Environment.NewLine +
                     "rentDay=" + RentDay + Environment.NewLine +
                     "workStart=" + WorkStartHour.ToString("00") + ":" + WorkStartMinute.ToString("00") + Environment.NewLine +
                     "workEnd=" + WorkEndHour.ToString("00") + ":" + WorkEndMinute.ToString("00") + Environment.NewLine);
@@ -385,20 +398,46 @@ namespace DeskClock
         {
             day = day.Date;
             bool remoteYear;
+            bool adjustedWorkday = false;
             lock (RemoteLock)
             {
                 remoteYear = RemoteYears.Contains(day.Year);
-                if (remoteYear && RemoteAdjustedWorkdays.Contains(day)) return true;
+                if (remoteYear && RemoteAdjustedWorkdays.Contains(day)) adjustedWorkday = true;
             }
             if (!remoteYear)
             {
                 for (int i = 0; i < AdjustedWorkdays.Length; i++)
                 {
-                    if (AdjustedWorkdays[i] == day) return true;
+                    if (AdjustedWorkdays[i] == day) { adjustedWorkday = true; break; }
                 }
             }
+            if (adjustedWorkday) return true;
             if (IsHoliday(day)) return false;
-            return day.DayOfWeek != DayOfWeek.Saturday && day.DayOfWeek != DayOfWeek.Sunday;
+            if (day.DayOfWeek == DayOfWeek.Sunday) return false;
+            if (day.DayOfWeek != DayOfWeek.Saturday) return true;
+            if (Config.SaturdayMode == "all") return true;
+            if (Config.SaturdayMode != "alternate") return false;
+            return IsBigWeek(day);
+        }
+
+        private static DateTime WeekStart(DateTime day)
+        {
+            int offset = ((int)day.DayOfWeek + 6) % 7;
+            return day.Date.AddDays(-offset);
+        }
+
+        private static bool IsBigWeek(DateTime day)
+        {
+            DateTime anchor = WeekStart(Config.BigWeekAnchor);
+            DateTime week = WeekStart(day);
+            int weekOffset = (int)((week - anchor).TotalDays / 7);
+            return weekOffset % 2 == 0;
+        }
+
+        public static int AttendanceDaysInMonth(int year, int month)
+        {
+            if (Config.AttendanceDays > 0) return Config.AttendanceDays;
+            return WorkdayCountInMonth(year, month);
         }
 
         public static int WorkdayCountInMonth(int year, int month)
@@ -540,25 +579,44 @@ namespace DeskClock
         }
     }
 
-    internal static class LibreCpuMonitor
+    internal static class LibreMonitor
     {
         private static readonly object SyncRoot = new object();
         private static LibreHardwareMonitor.Hardware.Computer computer;
-        private static bool failed;
+        private static bool openFailed;
+        private static bool cpuFailed;
+        private static bool gpuFailed;
+        private static bool gpuLogged;
+
+        private static bool EnsureOpen()
+        {
+            if (openFailed) return false;
+            if (computer != null) return true;
+            try
+            {
+                LibreHardwareMonitor.Hardware.Computer created = new LibreHardwareMonitor.Hardware.Computer();
+                created.IsCpuEnabled = true;
+                created.IsGpuEnabled = true;
+                created.Open();
+                computer = created;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                openFailed = true;
+                SysInfo.Log("libre open failed: " + ex.Message);
+                return false;
+            }
+        }
 
         public static int CpuTemperature()
         {
-            if (failed) return int.MinValue;
+            if (cpuFailed) return int.MinValue;
             lock (SyncRoot)
             {
                 try
                 {
-                    if (computer == null)
-                    {
-                        computer = new LibreHardwareMonitor.Hardware.Computer();
-                        computer.IsCpuEnabled = true;
-                        computer.Open();
-                    }
+                    if (!EnsureOpen()) return int.MinValue;
 
                     int preferred = int.MinValue;
                     int maximum = int.MinValue;
@@ -578,10 +636,115 @@ namespace DeskClock
                     if (preferred != int.MinValue) return preferred;
                     return maximum;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    failed = true;
+                    cpuFailed = true;
+                    SysInfo.Log("libre cpu failed: " + ex.Message);
                     return int.MinValue;
+                }
+            }
+        }
+
+        // Reads usage/temperature from the first discrete GPU through LibreHardwareMonitor,
+        // which covers AMD (ADL), NVIDIA (NVAPI) and Intel GPUs. The nvidia-smi based path
+        // in SysInfo only ever worked on NVIDIA machines, so AMD cards showed nothing.
+        public static void GpuStats(out int usage, out int temperature)
+        {
+            usage = int.MinValue;
+            temperature = int.MinValue;
+            if (gpuFailed) return;
+            lock (SyncRoot)
+            {
+                try
+                {
+                    if (!EnsureOpen()) return;
+
+                    foreach (LibreHardwareMonitor.Hardware.IHardware hardware in computer.Hardware)
+                    {
+                        if (hardware.HardwareType != LibreHardwareMonitor.Hardware.HardwareType.GpuNvidia &&
+                            hardware.HardwareType != LibreHardwareMonitor.Hardware.HardwareType.GpuAmd &&
+                            hardware.HardwareType != LibreHardwareMonitor.Hardware.HardwareType.GpuIntel) continue;
+
+                        int load = int.MinValue;
+                        int otherLoad = int.MinValue;
+                        int core = int.MinValue;
+                        int otherCore = int.MinValue;
+
+                        try
+                        {
+                            hardware.Update();
+                            foreach (LibreHardwareMonitor.Hardware.ISensor sensor in hardware.Sensors)
+                            {
+                                if (!sensor.Value.HasValue) continue;
+                                double raw = sensor.Value.Value;
+                                if (double.IsNaN(raw)) continue;
+                                string name = sensor.Name == null ? "" : sensor.Name;
+
+                                if (sensor.SensorType == LibreHardwareMonitor.Hardware.SensorType.Load)
+                                {
+                                    int value = (int)Math.Round(raw);
+                                    if (value < 0 || value > 100) continue;
+                                    if (name.IndexOf("GPU Core", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        if (load == int.MinValue) load = value;
+                                    }
+                                    else if (otherLoad == int.MinValue)
+                                    {
+                                        otherLoad = value;
+                                    }
+                                }
+                                else if (sensor.SensorType == LibreHardwareMonitor.Hardware.SensorType.Temperature)
+                                {
+                                    int value = (int)Math.Round(raw);
+                                    if (value < -50 || value > 150) continue;
+                                    if (name.IndexOf("Hot Spot", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                                    if (name.IndexOf("Junction", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                                    if (name.IndexOf("Core", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        if (core == int.MinValue) core = value;
+                                    }
+                                    else if (otherCore == int.MinValue)
+                                    {
+                                        otherCore = value;
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            SysInfo.Log("libre gpu sensor failed: " + ex.Message);
+                        }
+
+                        if (load == int.MinValue) load = otherLoad;
+                        if (core == int.MinValue) core = otherCore;
+                        if (load == int.MinValue && core == int.MinValue) continue;
+
+                        usage = load;
+                        temperature = core;
+
+                        if (!gpuLogged)
+                        {
+                            gpuLogged = true;
+                            string hardwareName;
+                            try { hardwareName = hardware.Name; }
+                            catch { hardwareName = "unknown"; }
+                            SysInfo.Log("GPU source=libre name=" + hardwareName + " usage=" + usage + " temp=" + temperature);
+                        }
+                        return;
+                    }
+
+                    if (!gpuLogged)
+                    {
+                        gpuLogged = true;
+                        SysInfo.Log("GPU source=libre no gpu hardware found");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    gpuFailed = true;
+                    usage = int.MinValue;
+                    temperature = int.MinValue;
+                    SysInfo.Log("libre gpu failed: " + ex.Message);
                 }
             }
         }
@@ -663,7 +826,7 @@ namespace DeskClock
 
         public static int CpuTemperature()
         {
-            int libre = LibreCpuMonitor.CpuTemperature();
+            int libre = LibreMonitor.CpuTemperature();
             if (libre != int.MinValue) return libre;
             int lenovo = LenovoCpuTemperature();
             if (lenovo != int.MinValue) return lenovo;
@@ -747,6 +910,20 @@ namespace DeskClock
         }
 
         public static void GpuStats(out int usage, out int temperature)
+        {
+            usage = int.MinValue;
+            temperature = int.MinValue;
+
+            LibreMonitor.GpuStats(out usage, out temperature);
+            if (usage != int.MinValue && temperature != int.MinValue) return;
+
+            int smiUsage, smiTemperature;
+            NvidiaSmiGpuStats(out smiUsage, out smiTemperature);
+            if (usage == int.MinValue) usage = smiUsage;
+            if (temperature == int.MinValue) temperature = smiTemperature;
+        }
+
+        private static void NvidiaSmiGpuStats(out int usage, out int temperature)
         {
             usage = int.MinValue;
             temperature = int.MinValue;
@@ -898,32 +1075,29 @@ namespace DeskClock
         private TextBox timeBox;
         private TextBox amtBox;
         private TextBox monthsBox;
+        private TextBox attendanceBox;
+        private ComboBox scheduleBox;
+        private TextBox anchorBox;
         private TextBox rentDayBox;
         private TextBox workStartBox;
         private TextBox workEndBox;
 
         public PayDialog()
         {
-            Title = "发薪日设置";
+            Title = "发薪与记薪设置";
             WindowStyle = WindowStyle.ToolWindow;
             ResizeMode = ResizeMode.NoResize;
-            Width = 320;
-            Height = 370;
+            Width = 440;
+            Height = 640;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             Topmost = true;
             Background = new SolidColorBrush(Color.FromRgb(0x24, 0x27, 0x2b));
 
             Grid g = new Grid();
-            g.Margin = new Thickness(14);
-            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            g.Margin = new Thickness(16);
+            for (int i = 0; i < 11; i++) g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             g.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(82) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(142) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             FontFamily yahei = new FontFamily("Microsoft YaHei UI");
@@ -931,60 +1105,96 @@ namespace DeskClock
             TextBlock l2 = new TextBlock { Text = "到账时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
             TextBlock l3 = new TextBlock { Text = "月薪(元)", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
             TextBlock l4 = new TextBlock { Text = "年薪月数", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
-            TextBlock l5 = new TextBlock { Text = "交房租日", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
-            TextBlock l6 = new TextBlock { Text = "上班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
-            TextBlock l7 = new TextBlock { Text = "下班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l5 = new TextBlock { Text = "月应出勤(留空自动)", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l6 = new TextBlock { Text = "休息制度", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l7 = new TextBlock { Text = "大小周基准", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l8 = new TextBlock { Text = "交房租日", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l9 = new TextBlock { Text = "上班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock l10 = new TextBlock { Text = "下班时间", Foreground = Brushes.WhiteSmoke, FontFamily = yahei, VerticalAlignment = VerticalAlignment.Center };
+
             dayBox = new TextBox { Text = Config.PayDay.ToString(), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             timeBox = new TextBox { Text = Config.PayHour.ToString("00") + ":" + Config.PayMinute.ToString("00"), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             amtBox = new TextBox { Text = Config.PayAmount > 0 ? Config.PayAmount.ToString("0.00", CultureInfo.InvariantCulture) : "", VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             monthsBox = new TextBox { Text = Config.PayMonths.ToString("0.##", CultureInfo.InvariantCulture), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
+            attendanceBox = new TextBox { Text = Config.AttendanceDays > 0 ? Config.AttendanceDays.ToString() : "", VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
+            scheduleBox = new ComboBox { Height = 26, VerticalContentAlignment = VerticalAlignment.Center };
+            scheduleBox.Items.Add("双休（周六、周日休息）");
+            scheduleBox.Items.Add("大小周（单双休轮换）");
+            scheduleBox.Items.Add("单休（周六上班、周日休息）");
+            scheduleBox.SelectedIndex = ScheduleIndex(Config.SaturdayMode);
+            anchorBox = new TextBox { Text = Config.BigWeekAnchor.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             rentDayBox = new TextBox { Text = Config.RentDay > 0 ? Config.RentDay.ToString() : "", VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             workStartBox = new TextBox { Text = Config.WorkStartHour.ToString("00") + ":" + Config.WorkStartMinute.ToString("00"), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
             workEndBox = new TextBox { Text = Config.WorkEndHour.ToString("00") + ":" + Config.WorkEndMinute.ToString("00"), VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
-            Grid.SetRow(l1, 0); Grid.SetColumn(l1, 0);
-            Grid.SetRow(dayBox, 0); Grid.SetColumn(dayBox, 1);
-            Grid.SetRow(l2, 1); Grid.SetColumn(l2, 0);
-            Grid.SetRow(timeBox, 1); Grid.SetColumn(timeBox, 1);
-            Grid.SetRow(l3, 2); Grid.SetColumn(l3, 0);
-            Grid.SetRow(amtBox, 2); Grid.SetColumn(amtBox, 1);
-            Grid.SetRow(l4, 3); Grid.SetColumn(l4, 0);
-            Grid.SetRow(monthsBox, 3); Grid.SetColumn(monthsBox, 1);
-            Grid.SetRow(l5, 4); Grid.SetColumn(l5, 0);
-            Grid.SetRow(rentDayBox, 4); Grid.SetColumn(rentDayBox, 1);
-            Grid.SetRow(l6, 5); Grid.SetColumn(l6, 0);
-            Grid.SetRow(workStartBox, 5); Grid.SetColumn(workStartBox, 1);
-            Grid.SetRow(l7, 6); Grid.SetColumn(l7, 0);
-            Grid.SetRow(workEndBox, 6); Grid.SetColumn(workEndBox, 1);
+
+            attendanceBox.ToolTip = "留空时自动计算当月应出勤天数；填写 1-31 后按此固定天数折算日薪。";
+            anchorBox.ToolTip = "填写大周内任意一天，例如 2026-10-10。只对大小周制度生效。";
+
+            TextBlock hint = new TextBlock
+            {
+                Text = "应出勤天数会自动计算法定节假日、调休和休息制度。\n大小周基准填写大周内任意一天，之后每周自动交替。",
+                Foreground = Hex("#9AA3AB"),
+                FontFamily = yahei,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 8, 0, 0)
+            };
 
             Button ok = new Button { Content = "保存", Width = 80, Height = 28, HorizontalAlignment = HorizontalAlignment.Right };
             ok.Click += delegate { TrySave(); };
-            Grid.SetRow(ok, 7); Grid.SetColumn(ok, 1);
-            ok.VerticalAlignment = VerticalAlignment.Bottom;
 
-            g.Children.Add(l1); g.Children.Add(l2); g.Children.Add(dayBox); g.Children.Add(timeBox); g.Children.Add(ok);
-            g.Children.Add(l3); g.Children.Add(amtBox); g.Children.Add(l4); g.Children.Add(monthsBox);
-            g.Children.Add(l5); g.Children.Add(rentDayBox); g.Children.Add(l6); g.Children.Add(workStartBox);
-            g.Children.Add(l7); g.Children.Add(workEndBox);
+            TextBlock[] labels = new TextBlock[] { l1, l2, l3, l4, l5, l6, l7, l8, l9, l10 };
+            UIElement[] inputs = new UIElement[] { dayBox, timeBox, amtBox, monthsBox, attendanceBox, scheduleBox, anchorBox, rentDayBox, workStartBox, workEndBox };
+            for (int i = 0; i < labels.Length; i++)
+            {
+                Grid.SetRow(labels[i], i);
+                Grid.SetColumn(labels[i], 0);
+                Grid.SetRow(inputs[i], i);
+                Grid.SetColumn(inputs[i], 1);
+                g.Children.Add(labels[i]);
+                g.Children.Add(inputs[i]);
+            }
+            Grid.SetRow(hint, 10);
+            Grid.SetColumn(hint, 0);
+            Grid.SetColumnSpan(hint, 2);
+            Grid.SetRow(ok, 11);
+            Grid.SetColumn(ok, 1);
+            ok.VerticalAlignment = VerticalAlignment.Bottom;
+            g.Children.Add(hint);
+            g.Children.Add(ok);
             Content = g;
+        }
+
+        private static int ScheduleIndex(string mode)
+        {
+            if (mode == "alternate") return 1;
+            if (mode == "all") return 2;
+            return 0;
+        }
+
+        private static Brush Hex(string s)
+        {
+            return (Brush)new BrushConverter().ConvertFromString(s);
         }
 
         private void TrySave()
         {
             int d;
-            if (!int.TryParse(dayBox.Text.Trim(), out d) || d < 1 || d > 28)
+            if (!int.TryParse(dayBox.Text.Trim(), out d) || d < 1 || d > 31)
             {
-                MessageBox.Show("发薪日请填 1-28 的数字", "提示");
+                MessageBox.Show("发薪日请填 1-31 的数字", "提示");
                 return;
             }
             int h = 0, mi = 0;
             int wsH = 0, wsM = 0, weH = 0, weM = 0;
             double amt = 0;
             double months = 12;
+            int attendanceDays = 0;
             int rentDay = 0;
             string t = timeBox.Text.Trim();
             if (t.Length > 0 && !Config.TryParseTime(t, out h, out mi))
             {
-                MessageBox.Show("到账时间请填 HH:mm，例如 09:00", "提示");
+                MessageBox.Show("到账时间请填 HH:mm，例如 18:00", "提示");
                 return;
             }
             if (!Config.TryParseTime(workStartBox.Text, out wsH, out wsM))
@@ -1016,14 +1226,35 @@ namespace DeskClock
                 MessageBox.Show("年薪月数请填 1-36，例如 13", "提示");
                 return;
             }
+            string attendanceText = attendanceBox.Text.Trim();
+            if (attendanceText.Length > 0 && (!int.TryParse(attendanceText, out attendanceDays) || attendanceDays < 1 || attendanceDays > 31))
+            {
+                MessageBox.Show("月应出勤天数请填 1-31，留空表示自动计算", "提示");
+                return;
+            }
+            DateTime anchor = Config.BigWeekAnchor;
+            string anchorText = anchorBox.Text.Trim();
+            if (anchorText.Length > 0 && !DateTime.TryParseExact(anchorText, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out anchor))
+            {
+                MessageBox.Show("大小周基准请填 yyyy-MM-dd，例如 2026-10-10", "提示");
+                return;
+            }
             string rentText = rentDayBox.Text.Trim();
             if (rentText.Length > 0 && (!int.TryParse(rentText, out rentDay) || rentDay < 1 || rentDay > 31))
             {
                 MessageBox.Show("交房租日请填 1-31，留空表示不设置", "提示");
                 return;
             }
+
+            string[] modes = new string[] { "none", "alternate", "all" };
+            int scheduleIndex = scheduleBox.SelectedIndex;
+            if (scheduleIndex < 0 || scheduleIndex > 2) scheduleIndex = 0;
+
             Config.PayDay = d; Config.PayHour = h; Config.PayMinute = mi; Config.PayAmount = amt;
             Config.PayMonths = months;
+            Config.AttendanceDays = attendanceDays;
+            Config.SaturdayMode = modes[scheduleIndex];
+            Config.BigWeekAnchor = anchor.Date;
             Config.RentDay = rentDay;
             Config.WorkStartHour = wsH; Config.WorkStartMinute = wsM;
             Config.WorkEndHour = weH; Config.WorkEndMinute = weM;
@@ -1248,7 +1479,7 @@ namespace DeskClock
             Content = panel;
 
             ContextMenu menu = new ContextMenu();
-            MenuItem setPay = new MenuItem { Header = "设置发薪日..." };
+            MenuItem setPay = new MenuItem { Header = "发薪与记薪设置..." };
             setPay.Click += delegate { OpenPayDialog(); };
             MenuItem setCountdown = new MenuItem { Header = "设置倒计时..." };
             setCountdown.Click += delegate { OpenCountdownDialog(); };
@@ -1322,7 +1553,7 @@ namespace DeskClock
             WinForms.ContextMenuStrip trayMenu = new WinForms.ContextMenuStrip();
             WinForms.ToolStripMenuItem showHide = new WinForms.ToolStripMenuItem("显示/隐藏");
             showHide.Click += delegate { ToggleClockVisibility(); };
-            WinForms.ToolStripMenuItem settings = new WinForms.ToolStripMenuItem("设置发薪日...");
+            WinForms.ToolStripMenuItem settings = new WinForms.ToolStripMenuItem("发薪与记薪设置...");
             settings.Click += delegate { OpenPayDialog(); };
             WinForms.ToolStripMenuItem countdowns = new WinForms.ToolStripMenuItem("设置倒计时...");
             countdowns.Click += delegate { OpenCountdownDialog(); };
@@ -1621,10 +1852,10 @@ namespace DeskClock
             }
             if (Config.PayAmount > 0)
             {
-                int workdays = HolidayCalendar.WorkdayCountInMonth(now.Year, now.Month);
+                int workdays = HolidayCalendar.AttendanceDaysInMonth(now.Year, now.Month);
                 double averageMonthly = Config.PayAmount * Config.PayMonths / 12.0;
                 dailyEarn = workdays > 0 ? averageMonthly / workdays : 0;
-                payDaily.Text = "日薪 ¥" + dailyEarn.ToString("0.00");
+                payDaily.Text = "日薪 ¥" + dailyEarn.ToString("0.00") + "（" + workdays + "天）";
                 if (!HolidayCalendar.IsWorkday(now))
                 {
                     payToday.Text = "今日不计薪";
