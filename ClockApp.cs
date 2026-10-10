@@ -331,6 +331,23 @@ namespace DeskClock
         }
     }
 
+    // 发薪倒计时文案：最后两天不再显示“剩1天”，只显示到发薪时刻的倒计时，
+    // 所以最后一天上午 9 点看到的就是到当天 18:00 的倒计时。
+    internal static class PayCountdown
+    {
+        public static string Label(DateTime now, DateTime target)
+        {
+            if ((target - now).TotalDays >= 2) return "发薪倒计时";
+            return target.Date == now.Date ? "今天发薪" : "发薪倒计时";
+        }
+
+        public static string Value(DateTime now, DateTime target)
+        {
+            TimeSpan left = target - now;
+            return left.TotalDays >= 2 ? HolidayCalendar.ShortSpan(left) : HolidayCalendar.ShortClock(left);
+        }
+    }
+
     internal static class HolidayCalendar
     {
         // 国办发明电〔2025〕7号：国务院办公厅关于2026年部分节假日安排的通知
@@ -363,16 +380,61 @@ namespace DeskClock
         private const string HolidayDataUrl = "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/";
         private const int HolidayCacheDays = 14;
 
-        public static string Countdown(DateTime today)
-        {
-            DateTime day = today.Date;
-            if (!IsWorkday(day)) return "假期中";
+        private static DateTime leaveCacheDay = DateTime.MinValue;
+        private static string leaveCacheText = "";
+        private static DateTime restCacheDay = DateTime.MinValue;
+        private static DateTime restCacheEnd = DateTime.MinValue;
 
+        // 工作日显示距放假天数；休假中显示距离下一个工作日上班的倒计时。
+        public static string Countdown(DateTime now)
+        {
+            DateTime day = now.Date;
+            if (!IsWorkday(day)) return "假期中(" + ShortSpan(NextWorkStart(day) - now) + ")";
+
+            if (leaveCacheDay == day) return leaveCacheText;
+            string text = "放假安排待公布";
             for (int i = 1; i <= 370; i++)
             {
-                if (!IsWorkday(day.AddDays(i))) return "距放假 " + i + "天";
+                if (!IsWorkday(day.AddDays(i))) { text = "距放假 " + i + "天"; break; }
             }
-            return "放假安排待公布";
+            leaveCacheDay = day;
+            leaveCacheText = text;
+            return text;
+        }
+
+        // 假期（含周末）结束的时间点：接下来的第一个工作日的上班时间。
+        private static DateTime NextWorkStart(DateTime day)
+        {
+            if (restCacheDay == day) return restCacheEnd;
+            DateTime workday = day.AddDays(1);
+            for (int i = 1; i <= 370; i++)
+            {
+                if (IsWorkday(day.AddDays(i))) { workday = day.AddDays(i); break; }
+            }
+            restCacheEnd = workday.AddHours(Config.WorkStartHour).AddMinutes(Config.WorkStartMinute);
+            restCacheDay = day;
+            return restCacheEnd;
+        }
+
+        // 只显示到目标时刻的时分秒倒计时，小时可以超过 24。
+        internal static string ShortClock(TimeSpan left)
+        {
+            if (left < TimeSpan.Zero) left = TimeSpan.Zero;
+            return ((int)left.TotalHours).ToString("00") + ":" + left.Minutes.ToString("00") + ":" + left.Seconds.ToString("00");
+        }
+
+        // 还剩 1 天以上时带上“N天”，不足一天时只显示时分秒。
+        internal static string ShortSpan(TimeSpan left)
+        {
+            if (left < TimeSpan.Zero) left = TimeSpan.Zero;
+            string clock = left.Hours.ToString("00") + ":" + left.Minutes.ToString("00") + ":" + left.Seconds.ToString("00");
+            return left.Days > 0 ? left.Days + "天 " + clock : clock;
+        }
+
+        internal static void InvalidateRestCache()
+        {
+            leaveCacheDay = DateTime.MinValue;
+            restCacheDay = DateTime.MinValue;
         }
 
         public static bool IsHoliday(DateTime day)
@@ -577,6 +639,7 @@ namespace DeskClock
                 RemoteYears.Add(year);
             }
             SysInfo.Log("holiday data loaded for " + year);
+            InvalidateRestCache();
         }
     }
 
@@ -1817,6 +1880,7 @@ namespace DeskClock
             hh.Text = now.Hour.ToString("00");
             mm.Text = now.Minute.ToString("00");
             ss.Text = now.Second.ToString("00");
+            if (restLine != null) restLine.Text = RestCountdown(now);
             RefreshPay();
         }
 
@@ -1831,18 +1895,8 @@ namespace DeskClock
                 day = Math.Min(Config.PayDay, DateTime.DaysInMonth(nm.Year, nm.Month));
                 target = new DateTime(nm.Year, nm.Month, day, Config.PayHour, Config.PayMinute, 0);
             }
-            TimeSpan left = target - now;
-            string clock = left.Hours.ToString("00") + ":" + left.Minutes.ToString("00") + ":" + left.Seconds.ToString("00");
-            if (left.Days > 0)
-            {
-                payLabel.Text = "发薪倒计时";
-                payValue.Text = left.Days + "天 " + clock;
-            }
-            else
-            {
-                payLabel.Text = "今天发薪";
-                payValue.Text = clock;
-            }
+            payLabel.Text = PayCountdown.Label(now, target);
+            payValue.Text = PayCountdown.Value(now, target);
             if (Config.PayAmount > 0)
             {
                 int workdays = HolidayCalendar.AttendanceDaysInMonth(now.Year, now.Month);
@@ -1929,7 +1983,7 @@ namespace DeskClock
                     {
                     DateTime now = DateTime.Now;
                     dateLine.Text = now.ToString("yyyy年M月d日 ") + WeekName(now);
-                    restLine.Text = RestCountdown(now);
+                    // 假期倒计时在 RefreshTime 中每秒刷新
                     RefreshCountdown();
                     upLine.Text = "开机:" + (int)up.TotalHours + "时" + up.Minutes + "分" + up.Seconds + "秒";
                         cpuLine.Text = "CPU:" + cpu + "%" + FormatTemperature(cpuTemp);
